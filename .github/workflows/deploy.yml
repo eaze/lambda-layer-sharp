@@ -1,0 +1,133 @@
+name: deploy service tar # if you change this name you MUST update next.config.js, look for process.env.GITHUB_WORKFLOW
+
+# Required secrets:
+#   BUILDEVENT_APIKEY
+#   SLACK_DEPLOYS_CHANNEL
+#   NPM_TOKEN
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+
+on:
+  push:
+    branches:
+      - "deploy/*"
+
+jobs:
+  docker:
+    name: Build and archive service
+    runs-on: ubuntu-latest
+    env:
+      BUILDEVENT_APIKEY: ${{ secrets.BUILDEVENT_APIKEY }}
+      BUILDEVENT_DATASET: "builds"
+      BUILDEVENT_CIPROVIDER: "github-actions"
+
+    steps:
+      - name: Set start time
+        run: echo "::set-env name=STARTTS::$(date +%s)"
+
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v1
+        with:
+          node-version: "12.x"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@eaze"
+
+      - name: Cache/restore .next cache
+        uses: actions/cache@v2
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}-next
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Cache/restore npm cache
+        uses: actions/cache@v2
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}-npm
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install honeycomb buildevents tool
+        run: |
+          sudo curl -L -o /usr/local/bin/buildevents https://github.com/honeycombio/buildevents/releases/download/v0.4.10/buildevents-linux-amd64
+          sudo chmod 755 /usr/local/bin/buildevents
+
+      - name: Set build variables
+        run: |
+          SERVICE_TARGET="${GITHUB_REPOSITORY/eaze\//}"
+          CLUSTER_TARGET="$(echo $GITHUB_REF | sed -n "s/refs\/heads\/deploy\/\(.\+\)/\1/p")"
+          GIT_HASH="$(git rev-parse --short HEAD)"
+          BUILD_TAG="$SERVICE_TARGET-$GIT_HASH-$GITHUB_RUN_ID"
+          echo "::set-env name=SERVICE_TARGET::$SERVICE_TARGET"
+          echo "::set-env name=CLUSTER_TARGET::$CLUSTER_TARGET"
+          echo "::set-env name=GIT_HASH::$GIT_HASH"
+          echo "::set-env name=BUILD_TAG::$BUILD_TAG"
+
+      - name: Create slack script
+        run: |
+          if [ $CLUSTER_TARGET = "production" ]; then
+              chan="#deploys"
+          else
+              chan="#deploys-staging"
+          fi
+          cat <<EOF > slack
+            #!/bin/bash
+            curl -X POST --data-urlencode "payload={\"channel\": \"$chan\", \"username\": \"deployomat-9000\", \"text\": \"\$1\", \"icon_emoji\": \":robot_face:\"}" ${{ secrets.SLACK_DEPLOYS_CHANNEL }} >/dev/null
+          EOF
+          chmod +x slack
+          sudo mv slack /usr/local/bin
+
+
+      - name: Slack build start
+        run: |
+          utterance="<https://github.com/eaze/$SERVICE_TARGET/commit/$GIT_HASH|"'`'"$SERVICE_TARGET@$GIT_HASH"'`'"> → "'`'$CLUSTER_TARGET'`'
+          echo "::set-env name=SLACK_STRING::$utterance"
+          slack ":gear: $SLACK_STRING <https://github.com/eaze/$SERVICE_TARGET/actions/runs/$GITHUB_RUN_ID|build started> (actor=$GITHUB_ACTOR)"
+
+      - name: Install
+        run: |
+          buildevents cmd $BUILD_TAG gh-action npm-ci -- npm ci --only=production
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Build
+        run: buildevents cmd $BUILD_TAG gh-action build -- npm run build
+
+      - name: I dunno...
+        run: cp $(which node) ./node
+
+      - name: Copy to S3
+        run: |
+          url="s3://eaze-deploys-east-1/$CLUSTER_TARGET/$BUILD_TAG.zip"
+          metadata="service=$SERVICE_TARGET,startts=$STARTTS,git=$GIT_HASH,runid=$GITHUB_RUN_ID,actor=$GITHUB_ACTOR,hc=$BUILD_TAG"
+          buildevents cmd $BUILD_TAG gh-action aws-s3-cp -- aws s3 cp --metadata "$metadata" /dist/sharp-layer.zip $url
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Update lambda
+        run: |
+          buildevents cmd $BUILD_TAG gh-action publish-lambda-layer -- aws lambda publish-layer-version \
+            --layer-name image-resizer-sharp-layer \
+            --content S3Bucket=eaze-deploys-east-1,S3Key="$CLUSTER_TARGET/$BUILD_TAG.zip" \
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_LAMBDA_WRITER_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_LAMBDA_WRITER_SECRET }}
+          AWS_DEFAULT_REGION: us-east-1
+
+      - name: Capture buildevents step
+        if: always()
+        run: buildevents step $BUILD_TAG gh-action $STARTTS build-service
+
+      - name: Finalize and send failed buildevents build
+        if: failure()
+        run: |
+          buildevents build $BUILD_TAG $STARTTS failure > trace-url
+          slack ":warning: $SLACK_STRING build workflow failed, build statistics <$(cat trace-url)|here>"
+
+      - name: Finalize and send successful buildevents build
+        if: success()
+        run: |
+          buildevents build $BUILD_TAG $STARTTS success > trace-url
+          slack ":white_check_mark: $SLACK_STRING build workflow complete, statistics <$(cat trace-url)|here>"

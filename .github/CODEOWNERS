@@ -1,0 +1,8 @@
+# github will autoassign PRs based on this team's settings
+* @eaze/platform
+
+# we can add additional users/teams here for specific file types. ex:
+# *.ts @eaze/typescript-gurus
+
+# or for specific directories, ex:
+# /redux @eaze/redux-wizards
