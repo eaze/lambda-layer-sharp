@@ -1,4 +1,4 @@
-name: deploy service tar # if you change this name you MUST update next.config.js, look for process.env.GITHUB_WORKFLOW
+name: build and deploy lambda layer
 
 # Required secrets:
 #   BUILDEVENT_APIKEY
@@ -6,6 +6,8 @@ name: deploy service tar # if you change this name you MUST update next.config.j
 #   NPM_TOKEN
 #   AWS_ACCESS_KEY_ID
 #   AWS_SECRET_ACCESS_KEY
+#   AWS_LAMBDA_WRITER_ID
+#   AWS_LAMBDA_WRITER_SECRET
 
 on:
   push:
@@ -31,14 +33,6 @@ jobs:
           node-version: "12.x"
           registry-url: "https://registry.npmjs.org"
           scope: "@eaze"
-
-      - name: Cache/restore .next cache
-        uses: actions/cache@v2
-        with:
-          path: .next/cache
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}-next
-          restore-keys: |
-            ${{ runner.os }}-node-
 
       - name: Cache/restore npm cache
         uses: actions/cache@v2
@@ -105,8 +99,9 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
 
-      - name: Update lambda
+      - name: Update lambda layer
         run: |
           buildevents cmd $BUILD_TAG gh-action publish-lambda-layer -- aws lambda publish-layer-version \
             --layer-name "image-resizer-sharp-layer-$CLUSTER_TARGET" \
