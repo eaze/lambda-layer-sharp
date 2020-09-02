@@ -109,8 +109,11 @@ jobs:
       - name: Update lambda
         run: |
           buildevents cmd $BUILD_TAG gh-action publish-lambda-layer -- aws lambda publish-layer-version \
-            --layer-name image-resizer-sharp-layer \
+            --layer-name "image-resizer-sharp-layer-$CLUSTER_TARGET" \
             --content S3Bucket=eaze-deploys-east-1,S3Key="$CLUSTER_TARGET/$BUILD_TAG.zip" \
+            --description "Sharp layer for image resizer" \
+            --license-info "Apache License 2.0" \
+            --compatible-runtimes nodejs12.x
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_LAMBDA_WRITER_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_LAMBDA_WRITER_SECRET }}
