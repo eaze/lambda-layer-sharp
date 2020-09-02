@@ -101,7 +101,7 @@ jobs:
         run: |
           url="s3://eaze-deploys-east-1/$CLUSTER_TARGET/$BUILD_TAG.zip"
           metadata="service=$SERVICE_TARGET,startts=$STARTTS,git=$GIT_HASH,runid=$GITHUB_RUN_ID,actor=$GITHUB_ACTOR,hc=$BUILD_TAG"
-          buildevents cmd $BUILD_TAG gh-action aws-s3-cp -- aws s3 cp --metadata "$metadata" /dist/sharp-layer.zip $url
+          buildevents cmd $BUILD_TAG gh-action aws-s3-cp -- aws s3 cp --metadata "$metadata" ./dist/sharp-layer.zip $url
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
